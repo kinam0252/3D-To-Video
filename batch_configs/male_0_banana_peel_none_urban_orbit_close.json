@@ -1,0 +1,38 @@
+{
+  "avatar": "male_0.glb",
+  "motion_subject": "s1",
+  "motion_action": "banana_peel_1",
+  "motion_start_frame": 300,
+  "motion_step": 6,
+  "object_type": "none",
+  "object_path": "",
+  "object_bone": "",
+  "object_size": 0,
+  "object_rotation": [
+    0,
+    0,
+    0
+  ],
+  "object_offset": [
+    0,
+    0,
+    0
+  ],
+  "hdri": "urban_street.exr",
+  "hdri_strength": 2.2,
+  "scene_preset": "urban",
+  "use_fog": true,
+  "orbit_start_deg": 90,
+  "orbit_sweep_deg": 45,
+  "orbit_direction": "left",
+  "cam_radius": 2.0,
+  "cam_height": 1.2,
+  "cam_lens": 85,
+  "cam_dof_fstop": 4.0,
+  "num_frames": 81,
+  "fps": 24,
+  "samples": 64,
+  "resolution": 640,
+  "use_denoising": true,
+  "output_name": "male_0_banana_peel_none_urban_orbit_close"
+}

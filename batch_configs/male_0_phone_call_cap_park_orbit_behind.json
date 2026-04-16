@@ -1,0 +1,38 @@
+{
+  "avatar": "male_0.glb",
+  "motion_subject": "s1",
+  "motion_action": "phone_call_1",
+  "motion_start_frame": 600,
+  "motion_step": 6,
+  "object_type": "hat",
+  "object_path": "assets/sketchfab/baseball_cap/scene.gltf",
+  "object_bone": "head",
+  "object_size": 0.25,
+  "object_rotation": [
+    0,
+    0,
+    0
+  ],
+  "object_offset": [
+    0.0,
+    0.1,
+    0.0
+  ],
+  "hdri": "kloofendal_48d_partly_cloudy_4k.exr",
+  "hdri_strength": 3.0,
+  "scene_preset": "hdri_only",
+  "use_fog": false,
+  "orbit_start_deg": 90,
+  "orbit_sweep_deg": 60,
+  "orbit_direction": "left",
+  "cam_radius": 2.8,
+  "cam_height": 1.25,
+  "cam_lens": 65,
+  "cam_dof_fstop": 4.0,
+  "num_frames": 81,
+  "fps": 24,
+  "samples": 64,
+  "resolution": 640,
+  "use_denoising": true,
+  "output_name": "male_0_phone_call_cap_park_orbit_behind"
+}

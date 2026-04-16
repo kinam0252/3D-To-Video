@@ -1,0 +1,38 @@
+{
+  "avatar": "female_1.glb",
+  "motion_subject": "s1",
+  "motion_action": "banana_peel_1",
+  "motion_start_frame": 300,
+  "motion_step": 6,
+  "object_type": "none",
+  "object_path": "",
+  "object_bone": "",
+  "object_size": 0,
+  "object_rotation": [
+    0,
+    0,
+    0
+  ],
+  "object_offset": [
+    0,
+    0,
+    0
+  ],
+  "hdri": "pedestrian_overpass_4k.exr",
+  "hdri_strength": 2.5,
+  "scene_preset": "hdri_only",
+  "use_fog": false,
+  "orbit_start_deg": 90,
+  "orbit_sweep_deg": 60,
+  "orbit_direction": "left",
+  "cam_radius": 2.8,
+  "cam_height": 1.25,
+  "cam_lens": 65,
+  "cam_dof_fstop": 4.0,
+  "num_frames": 81,
+  "fps": 24,
+  "samples": 64,
+  "resolution": 640,
+  "use_denoising": true,
+  "output_name": "female_1_banana_peel_none_overpass_orbit_behind"
+}

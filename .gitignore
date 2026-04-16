@@ -1,0 +1,30 @@
+# Large directories
+output/
+assets/
+vace_env/
+blender_env/
+sam3d_env/
+
+# Model files
+*.glb
+*.ply
+*.obj
+*.fbx
+*.npz
+*.pkl
+*.pt
+*.pth
+*.bin
+*.safetensors
+
+# Python
+__pycache__/
+*.pyc
+.conda/
+
+# Temp
+/tmp/
+*.log
+*.mp4
+*.png
+*.jpg

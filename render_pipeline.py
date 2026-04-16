@@ -1,0 +1,739 @@
+"""
+Automated Multi-View Avatar Render Pipeline
+============================================
+Config-driven rendering: swap avatar, motion, object, scene, camera easily.
+
+Usage:
+    blender --background --python render_pipeline.py -- --config config.json
+    
+Or with inline args:
+    blender --background --python render_pipeline.py -- \
+        --avatar male_0.glb --motion phone_call_1 --object backpack \
+        --hdri urban_street --num_frames 81
+"""
+import bpy, bmesh, numpy as np, os, math, pickle, time, json, sys
+from mathutils import Matrix, Vector, Euler
+
+# ========== PARSE CONFIG ==========
+argv = sys.argv
+if "--" in argv:
+    argv = argv[argv.index("--") + 1:]
+else:
+    argv = []
+
+# Defaults
+PROJECT_DIR = os.path.expanduser("~/Repos/3D-To-Video")
+CONFIG = {
+    # Avatar
+    "avatar": "male_0.glb",
+    
+    # Motion
+    "motion_subject": "s1",
+    "motion_action": "phone_call_1",
+    "motion_start_frame": 600,
+    "motion_step": 6,
+    "motion_source": "grab",  # grab or amass
+    
+    # Wearable object
+    "object_type": "backpack",  # backpack, hat, none
+    "object_path": "assets/sketchfab/black_backpack/scene.gltf",
+    "object_bone": "spine3",
+    "object_size": 0.45,
+    "object_rotation": [-90, 180, 0],  # degrees
+    "object_offset": [0.0, -0.20, -0.10],
+    "object_hide_parts": [],  # node name patterns to hide (e.g. ["daizi", "kouzi"] for straps)
+    
+    # Scene
+    "hdri": "urban_street.exr",
+    "hdri_strength": 2.2,
+    "scene_preset": "urban",  # urban, park, studio, minimal
+    
+    # Camera
+    "orbit_start_deg": 90,   # 90 = behind
+    "orbit_sweep_deg": 60,   # how much to rotate
+    "orbit_direction": "left",  # left or right
+    "cam_radius": 2.8,
+    "cam_height": 1.25,
+    "cam_lens": 65,
+    "cam_dof_fstop": 4.0,
+    "use_fog": True,
+    
+    # Render
+    "num_frames": 81,
+    "fps": 24,
+    "samples": 128,
+    "resolution": 1080,
+    "use_denoising": True,
+    
+    # Output
+    "output_name": "auto",  # auto-generates from config
+}
+
+# Parse JSON config file
+config_file = None
+i = 0
+while i < len(argv):
+    if argv[i] == "--config" and i+1 < len(argv):
+        config_file = argv[i+1]; i += 2
+    elif argv[i] == "--avatar" and i+1 < len(argv):
+        CONFIG["avatar"] = argv[i+1]; i += 2
+    elif argv[i] == "--motion" and i+1 < len(argv):
+        CONFIG["motion_action"] = argv[i+1]; i += 2
+    elif argv[i] == "--subject" and i+1 < len(argv):
+        CONFIG["motion_subject"] = argv[i+1]; i += 2
+    elif argv[i] == "--object" and i+1 < len(argv):
+        CONFIG["object_type"] = argv[i+1]; i += 2
+    elif argv[i] == "--hdri" and i+1 < len(argv):
+        CONFIG["hdri"] = argv[i+1]; i += 2
+    elif argv[i] == "--scene" and i+1 < len(argv):
+        CONFIG["scene_preset"] = argv[i+1]; i += 2
+    elif argv[i] == "--num_frames" and i+1 < len(argv):
+        CONFIG["num_frames"] = int(argv[i+1]); i += 2
+    elif argv[i] == "--output" and i+1 < len(argv):
+        CONFIG["output_name"] = argv[i+1]; i += 2
+    else:
+        i += 1
+
+if config_file:
+    with open(config_file, 'r') as f:
+        user_cfg = json.load(f)
+    CONFIG.update(user_cfg)
+
+# Resolve paths
+AVATAR_PATH = os.path.join(PROJECT_DIR, "assets/habitat_humanoids", CONFIG["avatar"])
+if CONFIG.get("motion_source", "grab") == "amass":
+    MOTION_PATH = os.path.join(PROJECT_DIR, f"assets/motions/amass/{CONFIG['motion_action']}")
+else:
+    MOTION_PATH = os.path.join(PROJECT_DIR, f"assets/motions/grab/grab/{CONFIG['motion_subject']}/{CONFIG['motion_action']}.npz")
+SMPLX_PKL = os.path.expanduser("~/Desktop/DATA/EgoX/SMPLX/models/smplx/SMPLX_MALE.pkl")
+HDRI_PATH = os.path.join(PROJECT_DIR, "assets/hdri", CONFIG["hdri"])
+OBJ_PATH = os.path.join(PROJECT_DIR, CONFIG["object_path"]) if CONFIG["object_type"] != "none" else None
+
+if CONFIG["output_name"] == "auto":
+    CONFIG["output_name"] = f"{CONFIG['avatar'].replace('.glb','')}_{CONFIG['motion_action']}_{CONFIG['object_type']}_{CONFIG['scene_preset']}"
+
+OUT_DIR = os.path.join(PROJECT_DIR, "output/renders", CONFIG["output_name"])
+os.makedirs(OUT_DIR, exist_ok=True)
+
+# Save config for reproducibility
+with open(os.path.join(OUT_DIR, "config.json"), 'w') as f:
+    json.dump(CONFIG, f, indent=2)
+
+print(f"=== Render Pipeline ===")
+print(f"Avatar: {CONFIG['avatar']}")
+print(f"Motion: {CONFIG['motion_subject']}/{CONFIG['motion_action']}")
+print(f"Object: {CONFIG['object_type']}")
+print(f"Scene:  {CONFIG['scene_preset']} + {CONFIG['hdri']}")
+print(f"Frames: {CONFIG['num_frames']}")
+print(f"Output: {OUT_DIR}")
+print()
+
+# ========== UTILITY FUNCTIONS ==========
+def rodrigues(rvec):
+    theta = np.linalg.norm(rvec)
+    if theta < 1e-8: return np.eye(3)
+    k = rvec / theta
+    K = np.array([[0,-k[2],k[1]],[k[2],0,-k[0]],[-k[1],k[0],0]])
+    return np.eye(3) + np.sin(theta)*K + (1-np.cos(theta))*K@K
+
+def aa_to_mat3x3(aa):
+    return Matrix(rodrigues(np.array(aa)).tolist()).to_3x3()
+
+R_COORD_INV = np.array([[1,0,0],[0,0,1],[0,-1,0]], dtype=np.float64)
+
+BODY_JOINT_NAMES = [
+    'left_hip','right_hip','spine1','left_knee','right_knee','spine2',
+    'left_ankle','right_ankle','spine3','left_foot','right_foot','neck',
+    'left_collar','right_collar','head','left_shoulder','right_shoulder',
+    'left_elbow','right_elbow','left_wrist','right_wrist',
+]
+RIGHT_HAND_NAMES = [f'right_{x}{i}' for x in ['index','middle','pinky','ring','thumb'] for i in [1,2,3]]
+LEFT_HAND_NAMES = [f'left_{x}{i}' for x in ['index','middle','pinky','ring','thumb'] for i in [1,2,3]]
+
+def pbr_mat(name, color, roughness=0.6, metallic=0.0, bump_scale=50, bump_str=0.1):
+    m = bpy.data.materials.new(name)
+    m.use_nodes = True
+    ns = m.node_tree.nodes; ls = m.node_tree.links
+    b = ns["Principled BSDF"]
+    b.inputs["Base Color"].default_value = (*color, 1)
+    b.inputs["Roughness"].default_value = roughness
+    b.inputs["Metallic"].default_value = metallic
+    tc = ns.new('ShaderNodeTexCoord')
+    noise = ns.new('ShaderNodeTexNoise')
+    noise.inputs["Scale"].default_value = bump_scale
+    noise.inputs["Detail"].default_value = 8
+    bump = ns.new('ShaderNodeBump')
+    bump.inputs["Strength"].default_value = bump_str
+    bump.inputs["Distance"].default_value = 0.002
+    ls.new(tc.outputs["Object"], noise.inputs["Vector"])
+    ls.new(noise.outputs["Fac"], bump.inputs["Height"])
+    ls.new(bump.outputs["Normal"], b.inputs["Normal"])
+    return m
+
+# ========== SCENE SETUP ==========
+bpy.ops.wm.read_factory_settings(use_empty=True)
+
+# Import avatar
+bpy.ops.import_scene.gltf(filepath=AVATAR_PATH)
+arm_obj = None
+for o in bpy.context.scene.objects:
+    if o.type == 'ARMATURE': arm_obj = o; break
+bpy.context.view_layer.update()
+pelvis_rest = arm_obj.matrix_world @ arm_obj.pose.bones['pelvis'].head
+
+# Measure avatar height from mesh bounding box
+avatar_coords = []
+for o in bpy.context.scene.objects:
+    if o.type == 'MESH' and o.name.startswith('SMPLX'):
+        for v in o.data.vertices:
+            avatar_coords.append((o.matrix_world @ v.co).z)
+AVATAR_HEIGHT = max(avatar_coords) - min(avatar_coords) if avatar_coords else 1.7
+print(f"Avatar height: {AVATAR_HEIGHT:.3f}m")
+
+# ========== IMPORT WEARABLE OBJECT ==========
+if OBJ_PATH and os.path.exists(OBJ_PATH):
+    existing_objs = set(bpy.context.scene.objects[:])
+    bpy.ops.import_scene.gltf(filepath=OBJ_PATH)
+    bpy.context.view_layer.update()
+    new_objs = [o for o in bpy.context.scene.objects if o not in existing_objs]
+    mesh_objs = [o for o in new_objs if o.type == 'MESH']
+    extra_objs = [o for o in new_objs if o.type != 'MESH']
+    
+    # Hide parts matching patterns (e.g. straps, buckles)
+    hide_patterns = CONFIG.get("object_hide_parts", [])
+    if hide_patterns:
+        def has_hidden_ancestor(obj):
+            p = obj.parent
+            while p:
+                for pat in hide_patterns:
+                    if pat.lower() in (p.name or "").lower():
+                        return True
+                p = p.parent
+            return False
+        hidden = [o for o in mesh_objs if has_hidden_ancestor(o)]
+        if hidden:
+            for o in hidden:
+                bpy.data.objects.remove(o, do_unlink=True)
+            mesh_objs = [o for o in mesh_objs if o not in hidden]
+            print(f"Hidden {len(hidden)} mesh parts matching {hide_patterns}")
+    
+    # Compute world-space bounding box from mesh vertices
+    all_coords = []
+    for o in mesh_objs:
+        for v in o.data.vertices:
+            all_coords.append(o.matrix_world @ v.co)
+    if all_coords:
+        bb_min = Vector((min(c.x for c in all_coords), min(c.y for c in all_coords), min(c.z for c in all_coords)))
+        bb_max = Vector((max(c.x for c in all_coords), max(c.y for c in all_coords), max(c.z for c in all_coords)))
+        center = (bb_min + bb_max) / 2
+        max_dim = max(bb_max.x-bb_min.x, bb_max.y-bb_min.y, bb_max.z-bb_min.z)
+        # Scale object proportional to avatar height (object_size is fraction of avatar height)
+        target_size = CONFIG["object_size"] * (AVATAR_HEIGHT / 1.7)  # normalize to reference height 1.7m
+        scale_factor = target_size / max_dim
+        print(f"Object scale: {scale_factor:.6f} (max_dim={max_dim:.1f}, target={target_size:.3f}, avatar_h={AVATAR_HEIGHT:.3f})")
+        
+        # Bake world transforms into mesh vertices directly (avoids hierarchy issues)
+        for o in mesh_objs:
+            mat = o.matrix_world
+            for v in o.data.vertices:
+                world_co = mat @ v.co
+                # Center and scale
+                v.co = (world_co - center) * scale_factor
+            o.data.update()
+        
+        # Bill vertex modification for caps (raise bill vertices so they do not cover eyes)
+        bill_raise = CONFIG.get("bill_raise", 0)
+        bill_shorten = CONFIG.get("bill_shorten", 0)
+        if bill_raise != 0 or bill_shorten != 0:
+            bill_y_thresh = CONFIG.get("bill_y_threshold", 0.03)
+            bill_z_thresh = CONFIG.get("bill_z_threshold", 0.0)
+            modified_count = 0
+            for o in mesh_objs:
+                for v in o.data.vertices:
+                    if v.co.y > bill_y_thresh and v.co.z < bill_z_thresh:
+                        if bill_raise != 0:
+                            v.co.z += bill_raise
+                        if bill_shorten != 0:
+                            v.co.y *= (1.0 - bill_shorten)
+                        modified_count += 1
+                o.data.update()
+            print(f"Bill modification: raised {modified_count} vertices by z+{bill_raise}, shortened y by {bill_shorten*100:.0f}%")
+        
+        # Fully unparent meshes and clear transforms
+        for o in mesh_objs:
+            o.parent = None
+            o.matrix_world = Matrix.Identity(4)
+            o.hide_render = False
+            o.hide_viewport = False
+        
+        # Delete all extra objects from Sketchfab hierarchy
+        for o in extra_objs:
+            bpy.data.objects.remove(o, do_unlink=True)
+        
+        # Create empty and parent all meshes to it
+        bp_empty = bpy.data.objects.new("OBJ_Empty", None)
+        bpy.context.scene.collection.objects.link(bp_empty)
+        for o in mesh_objs:
+            o.parent = bp_empty
+        
+        # Parent empty to avatar bone
+        rot = CONFIG["object_rotation"]
+        bp_empty.parent = arm_obj
+        bp_empty.parent_bone = CONFIG["object_bone"]
+        bp_empty.parent_type = 'BONE'
+        bp_empty.rotation_euler = Euler((math.radians(rot[0]), math.radians(rot[1]), math.radians(rot[2])))
+        bp_empty.location = Vector(CONFIG["object_offset"])
+        bpy.context.view_layer.update()
+        
+        print(f"Object '{CONFIG['object_type']}' attached to {CONFIG['object_bone']} ({len(mesh_objs)} meshes)")
+
+# ========== LOAD MOTION DATA ==========
+motion = np.load(MOTION_PATH, allow_pickle=True)
+if CONFIG.get("motion_source", "grab") == "amass":
+    # AMASS format: direct SMPL-X parameters
+    _amass_fps = float(motion.get('mocap_frame_rate', 120.0))
+    body_params = {
+        'transl': motion['trans'],
+        'global_orient': motion['root_orient'],
+        'body_pose': motion['pose_body'],
+        'right_hand_pose': motion['pose_hand'][:, :45],  # first 15 joints (45 params)
+        'left_hand_pose': motion['pose_hand'][:, 45:],   # last 15 joints (45 params)
+    }
+    # AMASS hand params are full axis-angle (not PCA) - flag for apply_pose
+    AMASS_FULL_HAND = True
+    total_frames = body_params['transl'].shape[0]
+    print(f"AMASS motion: {total_frames} frames @ {_amass_fps}fps ({total_frames/_amass_fps:.1f}s)")
+else:
+    body_params = motion['body'].item()['params']
+    AMASS_FULL_HAND = False
+    total_frames = body_params['transl'].shape[0]
+
+with open(SMPLX_PKL,'rb') as f:
+    smplx_data = pickle.load(f, encoding='latin1')
+hands_mean_r = np.array(smplx_data['hands_meanr'])
+hands_comp_r = np.array(smplx_data['hands_componentsr'])
+hands_mean_l = np.array(smplx_data['hands_meanl'])
+hands_comp_l = np.array(smplx_data['hands_componentsl'])
+
+print(f"Motion loaded: {total_frames} frames ({total_frames/120:.1f}s)")
+
+# ========== SCENE PRESETS ==========
+def setup_hdri():
+    world = bpy.data.worlds.new("World")
+    bpy.context.scene.world = world
+    world.use_nodes = True
+    wn = world.node_tree.nodes; wl = world.node_tree.links
+    for n in wn: wn.remove(n)
+    env_tex = wn.new('ShaderNodeTexEnvironment')
+    if os.path.exists(HDRI_PATH):
+        env_tex.image = bpy.data.images.load(HDRI_PATH)
+    mapping = wn.new('ShaderNodeMapping')
+    mapping.inputs["Rotation"].default_value = (0, 0, math.radians(90))
+    tex_coord = wn.new('ShaderNodeTexCoord')
+    bg = wn.new('ShaderNodeBackground')
+    bg.inputs["Strength"].default_value = CONFIG["hdri_strength"]
+    output = wn.new('ShaderNodeOutputWorld')
+    wl.new(tex_coord.outputs["Generated"], mapping.inputs["Vector"])
+    wl.new(mapping.outputs["Vector"], env_tex.inputs["Vector"])
+    wl.new(env_tex.outputs["Color"], bg.inputs["Color"])
+    wl.new(bg.outputs["Background"], output.inputs["Surface"])
+    # Volumetric fog (optional)
+    if CONFIG.get("use_fog", True):
+        vol = wn.new('ShaderNodeVolumeScatter')
+        vol.inputs["Color"].default_value = (0.9, 0.92, 0.95, 1)
+        vol.inputs["Density"].default_value = 0.008
+        vol.inputs["Anisotropy"].default_value = 0.3
+        wl.new(vol.outputs["Volume"], output.inputs["Volume"])
+
+def setup_ground():
+    bpy.ops.mesh.primitive_plane_add(size=50, location=(0,0,0))
+    gp = bpy.context.active_object; gp.name = "Ground"
+    gmat = bpy.data.materials.new("GroundMat")
+    gmat.use_nodes = True
+    gn = gmat.node_tree.nodes; gl = gmat.node_tree.links
+    gbsdf = gn["Principled BSDF"]
+    gbsdf.inputs["Roughness"].default_value = 0.9
+    
+    g_tc = gn.new('ShaderNodeTexCoord')
+    g_map = gn.new('ShaderNodeMapping')
+    g_map.inputs["Scale"].default_value = (4, 4, 4)
+    g_noise1 = gn.new('ShaderNodeTexNoise')
+    g_noise1.inputs["Scale"].default_value = 25
+    g_noise1.inputs["Detail"].default_value = 16
+    g_noise2 = gn.new('ShaderNodeTexNoise')
+    g_noise2.inputs["Scale"].default_value = 120
+    
+    preset = CONFIG["scene_preset"]
+    g_cr = gn.new('ShaderNodeValToRGB')
+    if preset in ("urban", "street"):
+        g_cr.color_ramp.elements[0].color = (0.08, 0.08, 0.09, 1)
+        g_cr.color_ramp.elements[1].color = (0.14, 0.13, 0.12, 1)
+    elif preset == "park":
+        g_cr.color_ramp.elements[0].color = (0.08, 0.12, 0.04, 1)
+        g_cr.color_ramp.elements[1].color = (0.12, 0.18, 0.06, 1)
+        gbsdf.inputs["Roughness"].default_value = 0.95
+    elif preset == "studio":
+        g_cr.color_ramp.elements[0].color = (0.25, 0.25, 0.25, 1)
+        g_cr.color_ramp.elements[1].color = (0.35, 0.35, 0.35, 1)
+    else:  # minimal
+        g_cr.color_ramp.elements[0].color = (0.3, 0.3, 0.3, 1)
+        g_cr.color_ramp.elements[1].color = (0.4, 0.4, 0.4, 1)
+    
+    g_bump = gn.new('ShaderNodeBump')
+    g_bump.inputs["Strength"].default_value = 0.3
+    g_bump.inputs["Distance"].default_value = 0.003
+    
+    gl.new(g_tc.outputs["Object"], g_map.inputs["Vector"])
+    gl.new(g_map.outputs["Vector"], g_noise1.inputs["Vector"])
+    gl.new(g_map.outputs["Vector"], g_noise2.inputs["Vector"])
+    gl.new(g_noise1.outputs["Fac"], g_cr.inputs["Fac"])
+    gl.new(g_cr.outputs["Color"], gbsdf.inputs["Base Color"])
+    gl.new(g_noise2.outputs["Fac"], g_bump.inputs["Height"])
+    gl.new(g_bump.outputs["Normal"], gbsdf.inputs["Normal"])
+    gp.data.materials.append(gmat)
+
+def setup_scene_urban():
+    mat_wood = pbr_mat("Wood", (0.22, 0.14, 0.06), 0.75, 0.0, 60, 0.2)
+    mat_metal = pbr_mat("Metal", (0.4, 0.4, 0.42), 0.3, 0.92, 80, 0.05)
+    mat_green = pbr_mat("GreenLeaf", (0.08, 0.18, 0.04), 0.85, 0.0, 30, 0.15)
+    mat_concrete = pbr_mat("Concrete", (0.35, 0.33, 0.30), 0.92, 0.0, 25, 0.25)
+    
+    # Back wall
+    bpy.ops.mesh.primitive_plane_add(size=20, location=(0, 5, 5))
+    wall = bpy.context.active_object; wall.name = "BackWall"
+    wall.rotation_euler = Euler((math.radians(90), 0, 0))
+    wall_mat = bpy.data.materials.new("WallBrick")
+    wall_mat.use_nodes = True
+    wn2 = wall_mat.node_tree.nodes; wl2 = wall_mat.node_tree.links
+    wbsdf = wn2["Principled BSDF"]
+    wbsdf.inputs["Roughness"].default_value = 0.92
+    w_tc = wn2.new('ShaderNodeTexCoord')
+    w_brick = wn2.new('ShaderNodeTexBrick')
+    w_brick.inputs["Scale"].default_value = 8
+    w_brick.inputs["Color1"].default_value = (0.42, 0.28, 0.22, 1)
+    w_brick.inputs["Color2"].default_value = (0.52, 0.35, 0.28, 1)
+    w_brick.inputs["Mortar"].default_value = (0.65, 0.62, 0.58, 1)
+    w_brick.inputs["Mortar Size"].default_value = 0.012
+    w_bump = wn2.new('ShaderNodeBump')
+    w_bump.inputs["Strength"].default_value = 0.6
+    wl2.new(w_tc.outputs["Object"], w_brick.inputs["Vector"])
+    wl2.new(w_brick.outputs["Color"], wbsdf.inputs["Base Color"])
+    wl2.new(w_brick.outputs["Fac"], w_bump.inputs["Height"])
+    wl2.new(w_bump.outputs["Normal"], wbsdf.inputs["Normal"])
+    wall.data.materials.append(wall_mat)
+    
+    # Side wall
+    bpy.ops.mesh.primitive_plane_add(size=20, location=(-6, 0, 5))
+    sw = bpy.context.active_object; sw.rotation_euler = Euler((math.radians(90), 0, math.radians(90)))
+    sw.data.materials.append(wall_mat)
+    
+    # Bench
+    bx, by = -2.0, 1.8
+    for slat in range(5):
+        bpy.ops.mesh.primitive_cube_add(size=1, location=(bx - 0.48 + slat*0.24, by, 0.44))
+        bpy.context.active_object.scale = (0.1, 0.25, 0.018); bpy.context.active_object.data.materials.append(mat_wood)
+    for slat in range(3):
+        bpy.ops.mesh.primitive_cube_add(size=1, location=(bx, by+0.22, 0.58+slat*0.14))
+        bpy.context.active_object.scale = (0.6, 0.015, 0.05); bpy.context.active_object.data.materials.append(mat_wood)
+    for lx in [-0.5, 0.5]:
+        for ly in [-0.15, 0.22]:
+            bpy.ops.mesh.primitive_cylinder_add(radius=0.015, depth=0.44, location=(bx+lx, by+ly, 0.22))
+            bpy.context.active_object.data.materials.append(mat_metal)
+    
+    # Tree planter
+    px, py = 2.2, 2.0
+    bpy.ops.mesh.primitive_cube_add(size=1, location=(px, py, 0.3))
+    bpy.context.active_object.scale = (0.4, 0.4, 0.3); bpy.context.active_object.data.materials.append(mat_concrete)
+    bpy.ops.mesh.primitive_cylinder_add(radius=0.035, depth=1.0, location=(px, py, 1.1))
+    bpy.context.active_object.data.materials.append(pbr_mat("Bark", (0.15, 0.1, 0.05), 0.9, 0, 100, 0.4))
+    for fx, fy, fz, fr in [(0,0,1.8,0.4),(0.15,-0.1,1.65,0.3),(-0.12,0.08,1.7,0.32),(0,0,1.95,0.25)]:
+        bpy.ops.mesh.primitive_ico_sphere_add(subdivisions=2, radius=fr, location=(px+fx, py+fy, fz))
+        leaf = bpy.context.active_object; leaf.data.materials.append(mat_green)
+        for poly in leaf.data.polygons: poly.use_smooth = True
+    
+    # Bollards
+    for bx2 in [-1.2, 1.2]:
+        bpy.ops.mesh.primitive_cylinder_add(radius=0.1, depth=0.8, location=(bx2, -2.0, 0.4))
+        bpy.context.active_object.data.materials.append(mat_concrete)
+    
+    # Street lamp
+    lx, ly = -4.0, 3.5
+    bpy.ops.mesh.primitive_cylinder_add(radius=0.05, depth=4.0, location=(lx, ly, 2.0))
+    bpy.context.active_object.data.materials.append(mat_metal)
+    lamp_glass = bpy.data.materials.new("LampGlass")
+    lamp_glass.use_nodes = True
+    lg = lamp_glass.node_tree.nodes["Principled BSDF"]
+    lg.inputs["Emission Color"].default_value = (1.0, 0.92, 0.7, 1)
+    lg.inputs["Emission Strength"].default_value = 5.0
+    bpy.ops.mesh.primitive_uv_sphere_add(radius=0.08, location=(lx, ly, 3.98))
+    bpy.context.active_object.data.materials.append(lamp_glass)
+    
+    # Curb
+    bpy.ops.mesh.primitive_cube_add(size=1, location=(0, -3.0, 0.08))
+    bpy.context.active_object.scale = (15, 0.15, 0.08); bpy.context.active_object.data.materials.append(mat_concrete)
+
+def setup_scene_park():
+    mat_green = pbr_mat("GreenLeaf", (0.08, 0.18, 0.04), 0.85, 0, 30, 0.15)
+    mat_green_dark = pbr_mat("DarkLeaf", (0.04, 0.12, 0.02), 0.85, 0, 30, 0.15)
+    mat_wood = pbr_mat("Wood", (0.22, 0.14, 0.06), 0.75, 0, 60, 0.2)
+    mat_stone = pbr_mat("Stone", (0.4, 0.38, 0.35), 0.9, 0, 30, 0.3)
+    mat_grass_edge = pbr_mat("GrassEdge", (0.06, 0.15, 0.03), 0.9, 0, 20, 0.1)
+    
+    # Surrounding trees (ring around scene for background fill)
+    import random
+    random.seed(42)
+    tree_positions = [
+        (-5, 4), (-3.5, 5), (-1, 5.5), (1.5, 5), (3.5, 4.5), (5, 3.5),
+        (5.5, 1), (5.5, -1), (5, -3), (-5, 1), (-5.5, -1), (-5, -3),
+        (-3, 2), (3.5, 2.5), (-1.5, 4.5), (4.5, 0),
+    ]
+    for i, (tx, ty) in enumerate(tree_positions):
+        trunk_h = 2.5 + random.random() * 2.0
+        trunk_r = 0.04 + random.random() * 0.04
+        bpy.ops.mesh.primitive_cylinder_add(radius=trunk_r, depth=trunk_h, location=(tx, ty, trunk_h/2))
+        bpy.context.active_object.data.materials.append(pbr_mat(f"Bark_{i}", (0.12+random.random()*0.06, 0.08+random.random()*0.04, 0.03+random.random()*0.03), 0.9, 0, 100, 0.4))
+        
+        canopy_r = 0.5 + random.random() * 0.8
+        canopy_h = trunk_h + canopy_r * 0.5
+        for dx, dy, dz, dr in [(0,0,0,1.0), (0.2,-0.15,-0.2,0.7), (-0.15,0.2,0.15,0.75), (0.1,0.1,0.3,0.5)]:
+            bpy.ops.mesh.primitive_ico_sphere_add(subdivisions=2, radius=canopy_r*dr, location=(tx+dx*canopy_r, ty+dy*canopy_r, canopy_h+dz*canopy_r))
+            l = bpy.context.active_object
+            leaf_mat = mat_green if random.random() > 0.3 else mat_green_dark
+            l.data.materials.append(leaf_mat)
+            for p in l.data.polygons: p.use_smooth = True
+    
+    # Grassy mounds (fill ground edges)
+    for gx, gy, gr in [(-4, -2, 0.8), (4, -2, 0.6), (-3, 3, 0.5), (4, 3, 0.7), (0, 4, 0.6)]:
+        bpy.ops.mesh.primitive_uv_sphere_add(radius=gr, location=(gx, gy, -0.1))
+        m = bpy.context.active_object; m.scale.z = 0.15
+        m.data.materials.append(mat_grass_edge)
+        for p in m.data.polygons: p.use_smooth = True
+    
+    # Stone path (curved)
+    for i in range(12):
+        px = -4.5 + i * 0.75
+        py = -1.5 + math.sin(i * 0.4) * 0.3
+        bpy.ops.mesh.primitive_cylinder_add(radius=0.2 + random.random()*0.1, depth=0.025, location=(px, py, 0.013))
+        bpy.context.active_object.data.materials.append(mat_stone)
+    
+    # Park bench (more detailed)
+    bx, by = -2.5, 0.8
+    for slat in range(6):
+        bpy.ops.mesh.primitive_cube_add(size=1, location=(bx - 0.6 + slat*0.24, by, 0.44))
+        s = bpy.context.active_object; s.scale = (0.1, 0.25, 0.018); s.data.materials.append(mat_wood)
+    for slat in range(3):
+        bpy.ops.mesh.primitive_cube_add(size=1, location=(bx, by+0.22, 0.58+slat*0.14))
+        s = bpy.context.active_object; s.scale = (0.7, 0.015, 0.05); s.data.materials.append(mat_wood)
+    for lx in [-0.55, 0.55]:
+        for ly in [-0.15, 0.22]:
+            bpy.ops.mesh.primitive_cylinder_add(radius=0.02, depth=0.44, location=(bx+lx, by+ly, 0.22))
+            bpy.context.active_object.data.materials.append(pbr_mat("BenchMetal", (0.2, 0.2, 0.2), 0.35, 0.9, 80, 0.05))
+    
+    # Flower bushes
+    flower_colors = [(0.6, 0.1, 0.15), (0.55, 0.4, 0.1), (0.5, 0.15, 0.5), (0.7, 0.3, 0.1)]
+    for fx, fy in [(1.5, 1.0), (-1.0, 2.5), (2.8, -0.5)]:
+        for j in range(5):
+            bpy.ops.mesh.primitive_uv_sphere_add(radius=0.08+random.random()*0.06, location=(fx+random.uniform(-0.3,0.3), fy+random.uniform(-0.3,0.3), 0.15+random.random()*0.15))
+            fb = bpy.context.active_object
+            fc = flower_colors[random.randint(0, len(flower_colors)-1)]
+            fb.data.materials.append(pbr_mat(f"Flower_{fx}_{j}", fc, 0.7, 0, 20, 0.05))
+            for p in fb.data.polygons: p.use_smooth = True
+        # Green base
+        bpy.ops.mesh.primitive_uv_sphere_add(radius=0.35, location=(fx, fy, 0.1))
+        gb = bpy.context.active_object; gb.scale.z = 0.4
+        gb.data.materials.append(mat_green)
+        for p in gb.data.polygons: p.use_smooth = True
+
+def setup_scene_studio():
+    # Cyclorama (curved backdrop)
+    bpy.ops.mesh.primitive_plane_add(size=15, location=(0, 4, 4))
+    back = bpy.context.active_object; back.rotation_euler.x = math.radians(90)
+    studio_mat = pbr_mat("StudioWall", (0.7, 0.7, 0.7), 0.95, 0, 10, 0.02)
+    back.data.materials.append(studio_mat)
+
+def setup_scene_minimal():
+    pass  # Just ground + HDRI
+
+def setup_scene_hdri_only():
+    """No synthetic props. HDRI is the entire background. Ground is shadow catcher."""
+    gp = bpy.context.scene.objects.get("Ground")
+    if gp:
+        # Make ground a shadow catcher - invisible but receives shadows
+        gp.is_shadow_catcher = True
+        # Also make it slightly reflective to pick up HDRI colors
+        gmat = gp.data.materials[0] if gp.data.materials else bpy.data.materials.new("ShadowCatcher")
+        gmat.use_nodes = True
+        bsdf = gmat.node_tree.nodes["Principled BSDF"]
+        bsdf.inputs["Base Color"].default_value = (0.5, 0.5, 0.5, 1)
+        bsdf.inputs["Roughness"].default_value = 0.8
+        bsdf.inputs["Specular IOR Level"].default_value = 0.1
+        if not gp.data.materials:
+            gp.data.materials.append(gmat)
+
+# Build scene
+setup_hdri()
+setup_ground()
+
+scene_builders = {
+    "urban": setup_scene_urban,
+    "park": setup_scene_park,
+    "studio": setup_scene_studio,
+    "minimal": setup_scene_minimal,
+    "hdri_only": setup_scene_hdri_only,
+}
+scene_builders.get(CONFIG["scene_preset"], setup_scene_minimal)()
+print(f"Scene '{CONFIG['scene_preset']}' created")
+
+# ========== LIGHTING ==========
+bpy.ops.object.light_add(type='SUN', location=(3, -2, 5))
+sun = bpy.context.active_object
+sun.data.energy = 6.0; sun.data.angle = math.radians(3)
+sun.data.color = (1.0, 0.95, 0.85)
+sun.rotation_euler = Euler((math.radians(50), math.radians(10), math.radians(25)))
+
+bpy.ops.object.light_add(type='AREA', location=(-3, -2, 2.5))
+fill = bpy.context.active_object
+fill.data.energy = 200; fill.data.size = 4; fill.data.color = (0.8, 0.85, 1.0)
+fill.rotation_euler = (math.radians(55), 0, math.radians(-25))
+
+bpy.ops.object.light_add(type='AREA', location=(1, 3, 3))
+rim = bpy.context.active_object
+rim.data.energy = 200; rim.data.size = 2; rim.data.color = (1.0, 0.9, 0.75)
+
+bpy.ops.object.light_add(type='AREA', location=(0, 0, 0.1))
+bounce = bpy.context.active_object
+bounce.data.energy = 40; bounce.data.size = 5; bounce.rotation_euler = (math.radians(180), 0, 0)
+
+# ========== CAMERA ==========
+bpy.ops.object.camera_add()
+cam = bpy.context.active_object
+cam.data.lens = CONFIG["cam_lens"]
+cam.data.dof.use_dof = True
+cam.data.dof.focus_distance = CONFIG.get("camera_distance", CONFIG.get("cam_radius", 2.8))
+cam.data.dof.aperture_fstop = CONFIG["cam_dof_fstop"]
+
+scene = bpy.context.scene
+scene.camera = cam
+scene.render.engine = 'CYCLES'
+scene.cycles.device = 'GPU'
+prefs = bpy.context.preferences.addons['cycles'].preferences
+prefs.compute_device_type = 'CUDA'
+prefs.get_devices()
+for d in prefs.devices: d.use = True
+scene.cycles.samples = CONFIG["samples"]
+scene.cycles.use_denoising = CONFIG["use_denoising"]
+scene.cycles.denoiser = 'OPENIMAGEDENOISE'
+scene.render.resolution_x = CONFIG["resolution"]
+scene.render.resolution_y = CONFIG["resolution"]
+scene.render.film_transparent = False
+scene.view_settings.view_transform = 'AgX'
+scene.view_settings.look = 'AgX - Medium High Contrast'
+
+# ========== POSE FUNCTION ==========
+def apply_pose(gi):
+    gi = min(gi, total_frames - 1)
+    t = body_params['transl'][gi]
+    arm_obj.location = Vector(t.tolist()) - pelvis_rest
+    go = body_params['global_orient'][gi]
+    R_go = rodrigues(go) @ R_COORD_INV
+    # Remove yaw (Z-axis in Blender Z-up) to keep avatar facing forward
+    from scipy.spatial.transform import Rotation as ScipyR
+    euler_bl = ScipyR.from_matrix(R_go).as_euler("XYZ", degrees=False)
+    euler_bl[2] = 0  # zero out Z rotation (yaw in Blender)
+    R_go = ScipyR.from_euler("XYZ", euler_bl).as_matrix()
+    arm_obj.pose.bones['pelvis'].rotation_mode = 'XYZ'
+    arm_obj.pose.bones['pelvis'].rotation_euler = Matrix(R_go.tolist()).to_3x3().to_euler('XYZ')
+    bp = body_params['body_pose'][gi]
+    for j, bname in enumerate(BODY_JOINT_NAMES):
+        if bname in arm_obj.pose.bones:
+            bone = arm_obj.pose.bones[bname]
+            bone.rotation_mode = 'XYZ'
+            bone.rotation_euler = aa_to_mat3x3(bp[j*3:(j+1)*3]).to_euler('XYZ')
+    if not CONFIG.get("skip_hand_pose", True if CONFIG.get("motion_source") == "amass" else False):
+        rh_raw = body_params['right_hand_pose'][gi]
+        if AMASS_FULL_HAND:
+            rh_full = rh_raw  # already axis-angle per joint
+        else:
+            n_comps = min(len(rh_raw), hands_comp_r.shape[0])
+            rh_full = hands_mean_r + rh_raw[:n_comps] @ hands_comp_r[:n_comps]
+        for j, bname in enumerate(RIGHT_HAND_NAMES):
+            if j*3+3 <= len(rh_full) and bname in arm_obj.pose.bones:
+                bone = arm_obj.pose.bones[bname]
+                bone.rotation_mode = 'XYZ'
+                bone.rotation_euler = aa_to_mat3x3(rh_full[j*3:(j+1)*3]).to_euler('XYZ')
+        lh_raw = body_params['left_hand_pose'][gi]
+        if AMASS_FULL_HAND:
+            lh_full = lh_raw
+        else:
+            n_comps_l = min(len(lh_raw), hands_comp_l.shape[0])
+            lh_full = hands_mean_l + lh_raw[:n_comps_l] @ hands_comp_l[:n_comps_l]
+        for j, bname in enumerate(LEFT_HAND_NAMES):
+            if j*3+3 <= len(lh_full) and bname in arm_obj.pose.bones:
+                bone = arm_obj.pose.bones[bname]
+                bone.rotation_mode = 'XYZ'
+                bone.rotation_euler = aa_to_mat3x3(lh_full[j*3:(j+1)*3]).to_euler('XYZ')
+
+# ========== RENDER ORBIT ==========
+NUM_FRAMES = CONFIG["num_frames"]
+CAM_RADIUS = CONFIG.get("camera_distance", CONFIG.get("cam_radius", 2.8))
+CAM_HEIGHT = CONFIG.get("camera_height", CONFIG.get("cam_height", 1.25))
+
+# Support both old (orbit_start_deg/orbit_sweep_deg) and new (orbit_start_angle/orbit_end_angle) config keys
+if "orbit_start_angle" in CONFIG:
+    orbit_start_rad = math.radians(CONFIG["orbit_start_angle"])
+    orbit_end_rad = math.radians(CONFIG.get("orbit_end_angle", CONFIG["orbit_start_angle"] + 60))
+else:
+    orbit_start_rad = math.radians(CONFIG["orbit_start_deg"])
+    sweep_rad = math.radians(CONFIG["orbit_sweep_deg"])
+    if CONFIG["orbit_direction"] == "left":
+        orbit_end_rad = orbit_start_rad + sweep_rad
+    else:
+        orbit_end_rad = orbit_start_rad - sweep_rad
+
+MOTION_START = CONFIG["motion_start_frame"]
+MOTION_STEP = CONFIG["motion_step"]
+
+t0 = time.time()
+for fi in range(NUM_FRAMES):
+    frac = fi / max(NUM_FRAMES - 1, 1)
+    frac_smooth = frac * frac * (3 - 2 * frac)
+    
+    # Apply pose first
+    gi = MOTION_START + fi * MOTION_STEP
+    apply_pose(gi)
+    bpy.context.view_layer.update()
+    
+    # Camera orbits around avatar
+    avatar_center = Vector((arm_obj.location.x, arm_obj.location.y, 1.15))
+    angle = orbit_start_rad + frac_smooth * (orbit_end_rad - orbit_start_rad)
+    cx = avatar_center.x + CAM_RADIUS * math.cos(angle)
+    cy = avatar_center.y + CAM_RADIUS * math.sin(angle)
+    cam.location = Vector((cx, cy, CAM_HEIGHT))
+    
+    direction = avatar_center - cam.location
+    cam.rotation_euler = direction.to_track_quat('-Z', 'Y').to_euler()
+    cam.data.dof.focus_distance = direction.length
+    bpy.context.view_layer.update()
+    
+    scene.render.filepath = os.path.join(OUT_DIR, f"frame_{fi:04d}.png")
+    bpy.ops.render.render(write_still=True)
+    
+    elapsed = time.time() - t0
+    fps_r = (fi + 1) / elapsed if elapsed > 0 else 0
+    eta = (NUM_FRAMES - fi - 1) / fps_r if fps_r > 0 else 0
+    print(f"Frame {fi+1}/{NUM_FRAMES} ({elapsed:.1f}s, ETA {eta:.0f}s)")
+
+# Create MP4
+import subprocess
+mp4_path = os.path.join(OUT_DIR, f"{CONFIG['output_name']}.mp4")
+subprocess.run([
+    "ffmpeg", "-y", "-framerate", str(CONFIG["fps"]),
+    "-i", os.path.join(OUT_DIR, "frame_%04d.png"),
+    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18",
+    mp4_path
+], check=True)
+
+total_time = time.time() - t0
+print(f"\n=== Pipeline Complete ===")
+print(f"Video: {mp4_path}")
+print(f"Total: {total_time:.1f}s ({total_time/NUM_FRAMES:.1f}s/frame)")

@@ -1,0 +1,22 @@
+{
+    "avatar": "male_1.glb",
+    "motion_subject": "s3",
+    "motion_action": "camera_takepicture_1",
+    "motion_start_frame": 400,
+    "motion_step": 6,
+    "object_type": "backpack",
+    "object_path": "assets/sketchfab/black_backpack/scene.gltf",
+    "object_bone": "spine3",
+    "object_size": 0.75,
+    "object_rotation": [-90, 110, 0],
+    "object_offset": [0.0, -0.06, -0.22],
+    "hdri": "studio_small_09_1k.exr",
+    "hdri_strength": 2.0,
+    "scene_preset": "studio",
+    "orbit_start_deg": 90,
+    "orbit_sweep_deg": 60,
+    "orbit_direction": "left",
+    "num_frames": 81,
+    "samples": 128,
+    "output_name": "male1_camera_backpack_studio"
+}
