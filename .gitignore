@@ -25,6 +25,11 @@ __pycache__/
 # Temp
 /tmp/
 *.log
+
+# Media (large)
 *.mp4
 *.png
 *.jpg
+
+# Batch logs
+*_log.txt
