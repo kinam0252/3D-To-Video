@@ -53,7 +53,7 @@ def main():
     right_hand_pose = poses[:, 111:156] # (N, 45)
 
     # Create SMPLX model
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cpu")  # CPU is sufficient for SMPLX vertex computation
     model = smplx.create(
         model_path=smplx_dir,
         model_type="smplx",
