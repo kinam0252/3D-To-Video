@@ -10,7 +10,7 @@ Renders HUMOTO GLB sequences with camera orbit for V2V pipeline.
 Usage:
     blender --background --python render_humoto_full.py -- \
         --sequence drinking_from_mug_with_right_hand-815 \
-        --hdri pedestrian_overpass_4k.exr \
+        --hdri pedestrian_overpass_1k.exr \
         --num_frames 49
 """
 import bpy, os, sys, math, time, json
@@ -30,7 +30,7 @@ CONFIG = {
     "sequence": "",
     "data_dir": "",
     "output_dir": "",
-    "hdri": "pedestrian_overpass_4k.exr",
+    "hdri": "pedestrian_overpass_1k.exr",
     "hdri_strength": 1.8,
     "num_frames": 49,
     "fps": 16,

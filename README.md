@@ -4,10 +4,6 @@ Generate **3D-consistent realistic videos** of human-object interactions.
 
 **Pipeline:** 3D Motion Capture → Blender Rendering → VACE V2V Diffusion
 
-![Pipeline](https://img.shields.io/badge/Pipeline-MoCap→Blender→V2V-blue)
-![Datasets](https://img.shields.io/badge/Datasets-OMOMO%20|%20HUMOTO-green)
-![License](https://img.shields.io/badge/License-Research-yellow)
-
 ## Overview
 
 This project builds a pipeline to:
@@ -24,163 +20,127 @@ This project builds a pipeline to:
 
 ---
 
-## Prerequisites
+## Quick Start (One-Command Setup)
 
-Before running the demo, you need the following installed on your system:
+> Requires: **Linux**, **conda**, **FFmpeg** (`sudo apt install ffmpeg`), **wget**
+
+```bash
+# 1. Clone
+git clone https://github.com/kinam0252/3D-To-Video.git
+cd 3D-To-Video
+
+# 2. Create Python environment
+conda create -n 3d-to-video python=3.11 -y
+conda activate 3d-to-video
+
+# 3. Run setup (downloads Blender + data + SMPLX + HDRI)
+bash setup.sh
+
+# 4. Run demo
+bash run_demo.sh --skip_v2v
+```
+
+That's it! The setup script handles everything:
+- ✅ Downloads Blender 5.1.0 (~300MB) into the project directory
+- ✅ Installs Python dependencies from `requirements.txt`
+- ✅ Downloads sample data from HuggingFace (~120MB):
+  - 3 OMOMO motion sequences + object meshes
+  - 2 HUMOTO animation files (.glb)
+  - SMPLX body model (SMPLX_MALE.npz)
+  - HDRI environment map
+
+### Check Outputs
+
+```bash
+ls output/demo/renders/
+# sub12_woodchair_005_orbit_right/     (264 frames + .mp4)
+# sub14_suitcase_010_orbit_right/      (160 frames + .mp4)
+# sub12_tripod_010_orbit_right/        (161 frames + .mp4)
+# lifting_and_putting_down_dining_chair-368_orbit_left/  (49 frames + .mp4)
+# eating_from_plastic_bowl_with_spoon-596_orbit_right/   (49 frames + .mp4)
+```
+
+**Expected time:** ~5-10 minutes for all 5 sequences on any modern CPU.
+
+---
+
+## Manual Setup (Step by Step)
+
+If `setup.sh` doesn't work or you want more control:
 
 ### 1. System Dependencies
 
-- **Linux** (tested on Ubuntu 22.04/24.04)
-- **NVIDIA GPU** with drivers (for V2V; rendering works on CPU)
-- **FFmpeg** (for video encoding)
-
 ```bash
-# Check FFmpeg is installed
+# FFmpeg (for video encoding)
+sudo apt install ffmpeg wget
+
+# Verify
 ffmpeg -version
-# If not: sudo apt install ffmpeg
 ```
 
 ### 2. Blender 5.1+
 
-Download and extract Blender (no installation needed):
-
 ```bash
-# Download Blender 5.1.0
 wget https://download.blender.org/release/Blender5.1/blender-5.1.0-linux-x64.tar.xz
 tar -xf blender-5.1.0-linux-x64.tar.xz
-
-# Verify
-./blender-5.1.0-linux-x64/blender --version
-# Should print: Blender 5.1.0
+./blender-5.1.0-linux-x64/blender --version  # Should print: Blender 5.1.0
 ```
 
-> **Note:** Blender is used headlessly (`--background`). No display server needed.
+> Blender runs headlessly (`--background`). No display server needed.
 
-### 3. SMPLX Body Models (for OMOMO pipeline)
-
-1. Register at [https://smpl-x.is.tue.mpg.de/](https://smpl-x.is.tue.mpg.de/)
-2. Download the SMPLX model files (`SMPLX_MALE.npz`, `SMPLX_FEMALE.npz`, `SMPLX_NEUTRAL.npz`)
-3. Place them in a directory, e.g.:
-
-```
-models/smplx/
-├── SMPLX_MALE.npz
-├── SMPLX_FEMALE.npz
-└── SMPLX_NEUTRAL.npz
-```
-
-### 4. Python Environment
+### 3. Python Environment
 
 ```bash
-# Create conda environment
 conda create -n 3d-to-video python=3.11 -y
 conda activate 3d-to-video
-
-# Install dependencies
-pip install torch torchvision  # or: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-pip install smplx scipy trimesh numpy huggingface_hub
-
-# Verify key packages
-python -c "import torch; print(f'PyTorch {torch.__version__}, CUDA: {torch.cuda.is_available()}')"
-python -c "import smplx; print('smplx OK')"
-python -c "from huggingface_hub import snapshot_download; print('huggingface_hub OK')"
+pip install -r requirements.txt
+# Or manually: pip install torch smplx scipy trimesh numpy huggingface_hub
 ```
 
-**Tested versions:** Python 3.11, PyTorch 2.11.0, smplx 0.1.28, scipy 1.17.1, numpy 1.26.4, huggingface_hub 1.10.2
-
-### 5. VACE (for V2V, optional)
-
-Only needed if you want to generate realistic videos (not just Blender renders).
+### 4. Download Data
 
 ```bash
-# Clone VACE
-git clone https://github.com/ali-vilab/VACE.git
-cd VACE
-
-# Follow VACE's setup instructions to download Wan2.1-VACE-14B model weights
-# Requires ~22GB VRAM (RTX 3090/4090/5090)
-```
-
----
-
-## Quick Start: Demo Pipeline
-
-### Step 1: Clone the repository
-
-```bash
-git clone https://github.com/kinam0252/3D-To-Video.git
-cd 3D-To-Video
-```
-
-### Step 2: Download sample data
-
-```bash
-conda activate 3d-to-video
 python download_data.py --data_dir ./data
 ```
 
-This downloads ~15MB of sample data from [HuggingFace](https://huggingface.co/datasets/kinam0252/3D-To-Video-samples):
+This downloads from [HuggingFace](https://huggingface.co/datasets/kinam0252/3D-To-Video-samples) and automatically sets up:
 
-| Type | Sequence | Description |
-|------|----------|-------------|
-| OMOMO | `sub12_woodchair_005` | Person interacting with wooden chair (264 frames) |
-| OMOMO | `sub14_suitcase_010` | Person handling suitcase (160 frames) |
-| OMOMO | `sub12_tripod_010` | Person setting up tripod (161 frames) |
-| HUMOTO | `lifting_and_putting_down_dining_chair-368` | Person lifting dining chair |
-| HUMOTO | `eating_from_plastic_bowl_with_spoon-596` | Person eating with spoon |
-
-Expected output:
 ```
-data/
+data/                    # Downloaded from HuggingFace
 ├── omomo/
-│   ├── sub12_woodchair_005/    # human.npz + object.npz
-│   ├── sub14_suitcase_010/
-│   ├── sub12_tripod_010/
-│   └── objects/                # woodchair.obj, suitcase.obj, tripod.obj
+│   ├── sequences_canonical/
+│   │   ├── sub12_woodchair_005/   # human.npz + object.npz
+│   │   ├── sub14_suitcase_010/
+│   │   └── sub12_tripod_010/
+│   └── objects/                   # woodchair.obj, suitcase.obj, tripod.obj
 └── humoto/
-    ├── lifting_and_putting_down_dining_chair-368/   # *.glb
-    └── eating_from_plastic_bowl_with_spoon-596/     # *.glb
+    ├── lifting_and_putting_down_dining_chair-368/  # *.glb
+    └── eating_from_plastic_bowl_with_spoon-596/    # *.glb
+
+models/smplx/            # Auto-copied from data/smplx/
+└── SMPLX_MALE.npz
+
+assets/hdri/             # Auto-copied from data/hdri/
+└── pedestrian_overpass_1k.exr
 ```
 
-### Step 3: Run the demo (render only)
+### 5. Run Demo
 
 ```bash
 bash run_demo.sh \
-  --blender /path/to/blender-5.1.0-linux-x64/blender \
-  --smplx_dir /path/to/models/smplx \
+  --blender ./blender-5.1.0-linux-x64/blender \
+  --smplx_dir ./models \
   --skip_v2v
 ```
 
-This will:
-1. **Precompute SMPLX vertices** for each OMOMO sequence (torch + smplx)
-2. **Render** all 5 sequences in Blender with orbit camera (EEVEE engine, ~0.1s/frame)
-3. Output rendered frames + MP4 videos
+### 6. (Optional) V2V Generation
 
-**Expected time:** ~5-10 minutes total for all 5 sequences.
-
-### Step 4: Check outputs
-
-```bash
-ls output/demo/renders/
-# Should show 5 directories:
-# sub12_woodchair_005_orbit_right/
-# sub14_suitcase_010_orbit_right/
-# sub12_tripod_010_orbit_right/
-# lifting_and_putting_down_dining_chair-368_orbit_left/
-# eating_from_plastic_bowl_with_spoon-596_orbit_right/
-
-# Each contains frame_NNNN.png files and an .mp4 video
-ls output/demo/renders/sub12_woodchair_005_orbit_right/*.mp4
-```
-
-### Step 5 (Optional): Run V2V generation
-
-Requires VACE setup and ~22GB VRAM GPU.
+Requires [VACE](https://github.com/ali-vilab/VACE) with Wan2.1-VACE-14B model (~22GB VRAM).
 
 ```bash
 bash run_demo.sh \
-  --blender /path/to/blender \
-  --smplx_dir /path/to/models/smplx \
+  --blender ./blender-5.1.0-linux-x64/blender \
+  --smplx_dir ./models \
   --vace_dir /path/to/VACE
 ```
 
@@ -196,44 +156,46 @@ bash run_demo.sh \
 human.npz + object.npz + object.obj
         ↓ precompute_smplx.py (torch + smplx)
     vertices.npz (SMPLX → mesh vertices, Y-up → Z-up)
-        ↓ render_interact.py (Blender)
+        ↓ render_interact.py (Blender EEVEE)
     frame_0000.png ... frame_NNNN.png (orbit camera, 30fps)
         ↓ 49-frame subsampling + depth extraction + VACE V2V
     realistic_video.mp4
 ```
 
-**Key technical details:**
+**Technical details:**
 - **Coordinate conversion:** SMPLX uses Y-up, Blender uses Z-up → `(x, y, z) → (x, -z, y)`
 - **Shape keys:** Each frame is stored as a Blender shape key for smooth mesh animation
 - **Object transforms:** Euler angles + translations keyframed per frame
-- **Orbit camera:** Camera orbits around the scene center over the animation duration
+- **Orbit camera:** Camera orbits around the scene center over the animation
 
 ### Pipeline B: HUMOTO
 
 ```
 animation.glb (with embedded skeleton + objects)
-        ↓ render_humoto_full.py (Blender)
+        ↓ render_humoto_full.py (Blender Cycles)
     frame_0000.png ... frame_NNNN.png (orbit camera)
         ↓ 49-frame subsampling + depth extraction + VACE V2V
     realistic_video.mp4
 ```
 
-**Key technical details:**
+**Technical details:**
 - GLB contains pre-animated skeleton with integrated objects
-- Render uses Cycles engine (higher quality than EEVEE, ~1s/frame)
+- Render uses Cycles engine (~1s/frame)
 - Camera auto-frames scene based on bounding box analysis
 
 ---
 
-## Key Scripts
+## Project Structure
 
-| Script | Description | Runs In |
-|--------|-------------|---------|
-| `download_data.py` | Download sample data from HuggingFace | Python |
-| `precompute_smplx.py` | Compute SMPLX mesh vertices (Y-up → Z-up) | Python (torch) |
-| `render_interact.py` | Render OMOMO sequences with orbit camera | Blender |
-| `render_humoto_full.py` | Render HUMOTO GLB files with orbit camera | Blender |
-| `run_demo.sh` | End-to-end demo pipeline orchestrator | Bash |
+| File | Description |
+|------|-------------|
+| `setup.sh` | **One-command setup** (Blender + deps + data) |
+| `download_data.py` | Download sample data + SMPLX + HDRI from HuggingFace |
+| `run_demo.sh` | End-to-end demo pipeline (render + optional V2V) |
+| `requirements.txt` | Python dependencies |
+| `precompute_smplx.py` | Compute SMPLX mesh vertices (Y-up → Z-up) |
+| `render_interact.py` | Blender script for OMOMO sequences |
+| `render_humoto_full.py` | Blender script for HUMOTO GLB files |
 
 ---
 
@@ -243,30 +205,26 @@ animation.glb (with embedded skeleton + objects)
 |------|-----|-----|------|
 | Blender rendering (OMOMO, EEVEE) | Not required | 4GB+ | ~0.1s/frame |
 | Blender rendering (HUMOTO, Cycles) | Optional (faster) | 8GB+ | ~1s/frame |
-| V2V generation (VACE) | 22GB+ VRAM | 32GB+ | ~12 min/sequence |
+| V2V generation (VACE) | ≥22GB VRAM | 32GB+ | ~12 min/sequence |
 
 ---
 
 ## Troubleshooting
 
-### "No module named smplx"
-Make sure you activated the conda environment: `conda activate 3d-to-video`
-
-### Blender crashes with "EEVEE" error
-Ensure you're using Blender 5.1+. The engine name is `BLENDER_EEVEE` (not `BLENDER_EEVEE_NEXT`).
-
-### V2V out of memory
-VACE requires ~22GB VRAM. Use `--offload_model True --t5_cpu` (already set in `run_demo.sh`).
-
-### Rendered frames look wrong (flipped/rotated)
-The Y-up → Z-up conversion in `precompute_smplx.py` handles this. If adding new data, ensure `(x, y, z) → (x, -z, y)`.
+| Problem | Solution |
+|---------|----------|
+| `No module named smplx` | `conda activate 3d-to-video && pip install -r requirements.txt` |
+| Blender EEVEE error | Use Blender 5.1+ (engine name is `BLENDER_EEVEE`, not `BLENDER_EEVEE_NEXT`) |
+| V2V out of memory | Requires ≥22GB VRAM. `--offload_model True --t5_cpu` already set in `run_demo.sh` |
+| Flipped/rotated renders | Y-up → Z-up handled by `precompute_smplx.py`. Verify `(x,y,z) → (x,-z,y)` |
+| `setup.sh` Blender download fails | Manually download from [blender.org](https://www.blender.org/download/) and use `--blender /path/to/blender` |
 
 ---
 
 ## Acknowledgments
 
-- [InterAct / OMOMO](https://github.com/jiashunwang/InterAct) — Human-object interaction motion capture dataset
-- [HUMOTO](https://humoto.is.tue.mpg.de/) — Animated humanoid-object interaction dataset
-- [VACE](https://github.com/ali-vilab/VACE) — Video-to-video diffusion model (Wan2.1-VACE-14B)
+- [InterAct / OMOMO](https://github.com/jiashunwang/InterAct) — Human-object interaction data
+- [HUMOTO](https://humoto.is.tue.mpg.de/) — Animated humanoid-object data
+- [VACE](https://github.com/ali-vilab/VACE) — Video-to-video diffusion (Wan2.1-VACE-14B)
 - [SMPL-X](https://smpl-x.is.tue.mpg.de/) — Expressive body model
 - [Blender](https://www.blender.org/) — 3D rendering engine

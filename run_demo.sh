@@ -15,9 +15,9 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-BLENDER="${BLENDER:-$(which blender 2>/dev/null || echo ~/Downloads/blender-5.1.0-linux-x64/blender)}"
+BLENDER="${BLENDER:-$(which blender 2>/dev/null || echo $SCRIPT_DIR/blender-5.1.0-linux-x64/blender)}"
 VACE_DIR="${VACE_DIR:-~/Repos/VACE}"
-SMPLX_DIR="${SMPLX_DIR:-~/Desktop/DATA/EgoX/SMPLX/models}"
+SMPLX_DIR="${SMPLX_DIR:-$SCRIPT_DIR/models}"
 DATA_DIR="$SCRIPT_DIR/data"
 OUTPUT_DIR="$SCRIPT_DIR/output/demo"
 SKIP_V2V=false
