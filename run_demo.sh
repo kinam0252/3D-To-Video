@@ -207,7 +207,8 @@ for i in "${!HUMOTO_SEQS[@]}"; do
       --sequence "$(basename "$seq")" \
       --data_dir "$HUMOTO_DATA" \
       --cam_mode "$cam" --no_background \
-      --output_dir "$OUTPUT_DIR/renders"
+      --output_dir "$OUTPUT_DIR/renders" \
+      --engine EEVEE
   else
     echo "[1/2] Render already exists"
   fi

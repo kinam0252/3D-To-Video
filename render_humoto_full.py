@@ -286,12 +286,24 @@ scene.camera = cam
 # ========== RENDER SETTINGS ==========
 if CONFIG["engine"] == "CYCLES":
     scene.render.engine = 'CYCLES'
-    scene.cycles.device = 'GPU'
-    prefs = bpy.context.preferences.addons['cycles'].preferences
-    prefs.compute_device_type = 'CUDA'
-    prefs.get_devices()
-    for d in prefs.devices:
-        d.use = True
+    # Try GPU, fall back to CPU if unavailable
+    use_gpu = False
+    try:
+        prefs = bpy.context.preferences.addons['cycles'].preferences
+        prefs.compute_device_type = 'CUDA'
+        prefs.get_devices()
+        cuda_devs = [d for d in prefs.devices if d.type == 'CUDA']
+        if cuda_devs:
+            scene.cycles.device = 'GPU'
+            for d in prefs.devices:
+                d.use = True
+            use_gpu = True
+            print(f"Cycles: using GPU ({cuda_devs[0].name})")
+    except Exception as e:
+        print(f"Cycles: GPU init failed ({e}), using CPU")
+    if not use_gpu:
+        scene.cycles.device = 'CPU'
+        print("Cycles: using CPU rendering")
     scene.cycles.samples = CONFIG["samples"]
     scene.cycles.use_denoising = CONFIG["use_denoising"]
     scene.cycles.denoiser = 'OPENIMAGEDENOISE'
