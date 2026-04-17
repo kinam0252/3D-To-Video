@@ -151,7 +151,7 @@ for i in "${!OMOMO_SEQS[@]}"; do
   RENDER_DIR="$OUTPUT_DIR/renders/${seq}_${cam}"
   if [ ! -d "$RENDER_DIR" ] || [ "$(ls "$RENDER_DIR"/frame_*.png 2>/dev/null | wc -l)" -lt 10 ]; then
     echo "[2/3] Rendering with Blender..."
-    "$BLENDER" --background --python render_interact.py -- \
+    OMOMO_DIR_OVERRIDE="$OMOMO_DATA" "$BLENDER" --background --python render_interact.py -- \
       --sequence "$seq" \
       --precomputed_dir "$OUTPUT_DIR/precomputed" \
       --output_dir "$OUTPUT_DIR/renders" \

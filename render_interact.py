@@ -25,7 +25,8 @@ else:
     argv = []
 
 PROJECT_DIR = os.path.expanduser("~/Repos/3D-To-Video")
-OMOMO_DIR = os.path.join(PROJECT_DIR, "assets/datasets/interact_data/InterAct/omomo")
+OMOMO_DIR = os.environ.get("OMOMO_DIR_OVERRIDE",
+    os.path.join(PROJECT_DIR, "assets/datasets/interact_data/InterAct/omomo"))
 
 CONFIG = {
     "sequence": "",

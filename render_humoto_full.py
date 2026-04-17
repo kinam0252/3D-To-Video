@@ -28,6 +28,8 @@ HUMOTO_DIR = os.path.join(PROJECT_DIR, "assets/datasets/humoto_subset/humoto")
 
 CONFIG = {
     "sequence": "",
+    "data_dir": "",
+    "output_dir": "",
     "hdri": "pedestrian_overpass_4k.exr",
     "hdri_strength": 1.8,
     "num_frames": 49,
@@ -51,6 +53,10 @@ i = 0
 while i < len(argv):
     if argv[i] == "--sequence" and i+1 < len(argv):
         CONFIG["sequence"] = argv[i+1]; i += 2
+    elif argv[i] == "--data_dir" and i+1 < len(argv):
+        CONFIG["data_dir"] = argv[i+1]; i += 2
+    elif argv[i] == "--output_dir" and i+1 < len(argv):
+        CONFIG["output_dir"] = argv[i+1]; i += 2
     elif argv[i] == "--hdri" and i+1 < len(argv):
         CONFIG["hdri"] = argv[i+1]; i += 2
     elif argv[i] == "--num_frames" and i+1 < len(argv):
@@ -83,10 +89,15 @@ if not CONFIG["sequence"]:
     sys.exit(1)
 
 SEQ_NAME = CONFIG["sequence"]
+if CONFIG["data_dir"]:
+    HUMOTO_DIR = os.path.expanduser(CONFIG["data_dir"])
 GLB_PATH = os.path.join(HUMOTO_DIR, SEQ_NAME, f"{SEQ_NAME}.glb")
 HDRI_PATH = os.path.join(PROJECT_DIR, "assets/hdri", CONFIG["hdri"])
 CAM_MODE = CONFIG["cam_mode"]
-OUT_DIR = os.path.join(PROJECT_DIR, "output/humoto_renders", f"{SEQ_NAME}_{CAM_MODE}")
+if CONFIG["output_dir"]:
+    OUT_DIR = os.path.join(os.path.expanduser(CONFIG["output_dir"]), f"{SEQ_NAME}_{CAM_MODE}")
+else:
+    OUT_DIR = os.path.join(PROJECT_DIR, "output/humoto_renders", f"{SEQ_NAME}_{CAM_MODE}")
 os.makedirs(OUT_DIR, exist_ok=True)
 
 with open(os.path.join(OUT_DIR, "config.json"), 'w') as f:
