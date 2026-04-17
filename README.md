@@ -22,10 +22,14 @@ This project builds a pipeline to:
 
 ## Quick Start (One-Command Setup)
 
-> Requires: **Linux**, **conda**, **FFmpeg** (`sudo apt install ffmpeg`), **wget**
+> Requires: **Linux**, **conda**, **FFmpeg**, **wget**, **GitHub access** (private repo)
 
 ```bash
-# 1. Clone
+# 0. Prerequisites (one-time)
+sudo apt install ffmpeg wget    # if not installed
+# conda: https://docs.anaconda.com/miniconda/install/#quick-command-line-install
+
+# 1. Clone (needs GitHub auth for private repo)
 git clone https://github.com/kinam0252/3D-To-Video.git
 cd 3D-To-Video
 
@@ -33,7 +37,7 @@ cd 3D-To-Video
 conda create -n 3d-to-video python=3.11 -y
 conda activate 3d-to-video
 
-# 3. Run setup (downloads Blender + data + SMPLX + HDRI)
+# 3. Run setup (downloads Blender + pip install + data + SMPLX + HDRI)
 bash setup.sh
 
 # 4. Run demo
