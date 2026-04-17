@@ -4,6 +4,18 @@ Generate **3D-consistent realistic videos** of human-object interactions.
 
 **Pipeline:** 3D Motion Capture → Blender Rendering → VACE V2V Diffusion
 
+## Demo Results
+
+5 OMOMO sequences: Blender 3D render (left) → VACE V2V realistic output (right)
+
+| Sequence | Blender Render | VACE V2V Output |
+|----------|---------------|-----------------|
+| Woodchair | [🎬 render](https://huggingface.co/datasets/kinam0252/3D-To-Video-samples/resolve/main/examples/renders/sub12_woodchair_005_render.mp4) | [🎬 v2v](https://huggingface.co/datasets/kinam0252/3D-To-Video-samples/resolve/main/examples/v2v/sub12_woodchair_005_v2v.mp4) |
+| Suitcase | [🎬 render](https://huggingface.co/datasets/kinam0252/3D-To-Video-samples/resolve/main/examples/renders/sub14_suitcase_010_render.mp4) | [🎬 v2v](https://huggingface.co/datasets/kinam0252/3D-To-Video-samples/resolve/main/examples/v2v/sub14_suitcase_010_v2v.mp4) |
+| Tripod | [🎬 render](https://huggingface.co/datasets/kinam0252/3D-To-Video-samples/resolve/main/examples/renders/sub12_tripod_010_render.mp4) | [🎬 v2v](https://huggingface.co/datasets/kinam0252/3D-To-Video-samples/resolve/main/examples/v2v/sub12_tripod_010_v2v.mp4) |
+| Monitor | [🎬 render](https://huggingface.co/datasets/kinam0252/3D-To-Video-samples/resolve/main/examples/renders/sub11_monitor_005_render.mp4) | [🎬 v2v](https://huggingface.co/datasets/kinam0252/3D-To-Video-samples/resolve/main/examples/v2v/sub11_monitor_005_v2v.mp4) |
+| Floor Lamp | [🎬 render](https://huggingface.co/datasets/kinam0252/3D-To-Video-samples/resolve/main/examples/renders/sub11_floorlamp_035_render.mp4) | [🎬 v2v](https://huggingface.co/datasets/kinam0252/3D-To-Video-samples/resolve/main/examples/v2v/sub11_floorlamp_035_v2v.mp4) |
+
 ## Overview
 
 This project builds a pipeline to:
